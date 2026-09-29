@@ -42,6 +42,7 @@ from langchain_core.output_parsers import PydanticOutputParser
 
 from agent import (
     build_research_graph,
+    extract_sources_from_chat_history,
     extract_sources_from_tool_steps,
     get_graph_ascii,
     get_graph_mermaid,
@@ -146,6 +147,8 @@ def run_query(
 
     real_tool_calls = sorted({s.tool for s in accumulated_tool_steps})
     real_sources = extract_sources_from_tool_steps(accumulated_tool_steps)
+    if not real_sources and chat_history:
+        real_sources = extract_sources_from_chat_history(chat_history)
 
     if structured is not None:
         structured.tools_used = real_tool_calls or structured.tools_used

@@ -86,6 +86,90 @@ def extract_sources_from_tool_steps(tool_steps: list[Any]) -> list[str]:
     return sources
 
 
+def extract_sources_from_chat_history(chat_history: list[BaseMessage]) -> list[str]:
+    """Trích xuất các URL và nguồn đã có trong lịch sử trò chuyện (khi câu hỏi sau kế thừa câu trước)."""
+    sources: list[str] = []
+    seen = set()
+
+    def _add(s: str) -> None:
+        cleaned = s.strip().rstrip(".,;)")
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            sources.append(cleaned)
+
+    for msg in chat_history:
+        text = str(getattr(msg, "content", ""))
+        # 1. Nếu tin nhắn AI chứa JSON có trường sources
+        if "sources" in text:
+            try:
+                import json
+                from output_parsing import extract_json_block
+                data = json.loads(extract_json_block(text))
+                for src in data.get("sources", []):
+                    if isinstance(src, str) and not src.startswith("Không có"):
+                        _add(src)
+            except Exception:
+                pass
+        # 2. Bắt tất cả các URL tìm thấy trong nội dung tin nhắn
+        for match in _URL_RE.finditer(text):
+            _add(match.group(0))
+
+    return sources
+
+
+def format_critic_writer_context(
+    query: str,
+    chat_history: list[BaseMessage],
+    tool_steps: list[ToolStep],
+    researcher_message: str | None = None,
+) -> str:
+    """Tạo nội dung ngữ cảnh đầy đủ gửi cho CriticWriter Node (kết hợp history + tool + researcher)."""
+    blocks: list[str] = []
+
+    # 1. Ngữ cảnh lịch sử trò chuyện (nếu có)
+    if chat_history:
+        history_lines = ["=== NGỮ CẢNH TỪ CÁC CÂU HỎI TRƯỚC ĐÓ ==="]
+        for msg in chat_history[-6:]:
+            role = "Người dùng" if isinstance(msg, HumanMessage) else "Agent"
+            content = str(getattr(msg, "content", "")).strip()
+            if role == "Agent" and "{" in content and "summary" in content:
+                try:
+                    import json
+                    from output_parsing import extract_json_block
+                    parsed = json.loads(extract_json_block(content))
+                    content = parsed.get("summary", content)[:600]
+                except Exception:
+                    content = content[:600]
+            else:
+                content = content[:400]
+            history_lines.append(f"- {role}: {content}")
+        blocks.append("\n".join(history_lines))
+
+    # 2. Câu hỏi hiện tại của người dùng
+    blocks.append(f"=== CÂU HỎI NGHIÊN CỨU HIỆN TẠI ===\n{query}")
+
+    # 3. Phân tích hoặc đề xuất trực tiếp từ Researcher Agent (nếu có)
+    if researcher_message and researcher_message.strip():
+        blocks.append(
+            f"=== PHÂN TÍCH & KẾT LUẬN CỦA RESEARCHER AGENT ===\n{researcher_message.strip()}"
+        )
+
+    # 4. Dữ liệu cào & tra cứu từ các tool trong lượt này
+    if tool_steps:
+        findings_blocks = ["=== DỮ LIỆU THU THẬP TỪ CÔNG CỤ TRONG LƯỢT NÀY ==="]
+        for s in tool_steps:
+            findings_blocks.append(
+                f"--- [Nguồn / Tool: {s.tool} | Truy vấn: {s.input}] ---\n{s.output}"
+            )
+        blocks.append("\n\n".join(findings_blocks))
+    else:
+        if not chat_history and not researcher_message:
+            blocks.append("(Không thu thập được thông tin từ công cụ ngoài; sử dụng kiến thức nền).")
+
+    blocks.append("Hãy phản biện, đối chiếu loại bỏ mâu thuẫn và xuất bài báo cáo JSON hoàn chỉnh.")
+    return "\n\n".join(blocks)
+
+
 class ResearchState(TypedDict):
     """Trạng thái chia sẻ giữa các Node trong LangGraph."""
 
@@ -181,24 +265,24 @@ def build_research_graph(settings: Settings) -> tuple[Any, PydanticOutputParser]
     def critic_writer_node(state: ResearchState) -> dict[str, Any]:
         query = state.get("query", "")
         tool_steps = state.get("tool_steps", [])
+        chat_history = state.get("chat_history", [])
 
-        if tool_steps:
-            findings_blocks = []
-            for s in tool_steps:
-                findings_blocks.append(
-                    f"--- [Nguồn / Tool: {s.tool} | Truy vấn: {s.input}] ---\n{s.output}"
-                )
-            findings_text = "\n\n".join(findings_blocks)
-        else:
-            findings_text = "(Không thu thập được thông tin từ công cụ ngoài; sử dụng kiến thức nền)."
+        # Lấy nội dung phản hồi cuối của Researcher nếu có (khi researcher tự tổng hợp)
+        researcher_msg = None
+        messages = state.get("messages", [])
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and not getattr(msg, "tool_calls", None) and str(msg.content).strip():
+                researcher_msg = str(msg.content).strip()
+                break
 
         format_inst = parser.get_format_instructions()
         system_content = CRITIC_WRITER_SYSTEM_PROMPT.format(format_instructions=format_inst)
 
-        user_content = (
-            f"Câu hỏi nghiên cứu: {query}\n\n"
-            f"Dữ liệu thu thập và bài viết từ các nguồn thực tế:\n{findings_text}\n\n"
-            "Hãy phản biện, đối chiếu loại bỏ mâu thuẫn và xuất bài báo cáo JSON hoàn chỉnh."
+        user_content = format_critic_writer_context(
+            query=query,
+            chat_history=chat_history,
+            tool_steps=tool_steps,
+            researcher_message=researcher_msg,
         )
 
         response = llm.invoke(
@@ -212,6 +296,10 @@ def build_research_graph(settings: Settings) -> tuple[Any, PydanticOutputParser]
         structured = None
         real_tools = sorted({s.tool for s in tool_steps})
         real_sources = extract_sources_from_tool_steps(tool_steps)
+
+        # Nếu lượt này không gọi tool mới nhưng kế thừa từ lịch sử, kế thừa nguồn từ lịch sử
+        if not real_sources and chat_history:
+            real_sources = extract_sources_from_chat_history(chat_history)
 
         try:
             structured = parse_agent_output(raw_text, parser)
