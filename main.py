@@ -40,10 +40,16 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import PydanticOutputParser
 
-from agent import build_research_graph, get_graph_ascii, get_graph_mermaid
+from agent import (
+    build_research_graph,
+    extract_sources_from_tool_steps,
+    get_graph_ascii,
+    get_graph_mermaid,
+)
 from config import ConfigError, Settings, load_settings
 from observability import JsonlTraceLogger
 from output_parsing import parse_agent_output
+from schemas import ResearchResponse
 from session_manager import SessionManager
 from transcript import MarkdownTranscriptWriter, ToolStep
 from ui import (
@@ -139,19 +145,29 @@ def run_query(
 
 
     real_tool_calls = sorted({s.tool for s in accumulated_tool_steps})
+    real_sources = extract_sources_from_tool_steps(accumulated_tool_steps)
 
     if structured is not None:
         structured.tools_used = real_tool_calls or structured.tools_used
+        if not structured.sources and real_sources:
+            structured.sources = real_sources
         render_research_result(structured, real_tool_calls, stream=stream)
     elif final_output:
         try:
             structured = parse_agent_output(final_output, parser)
             structured.tools_used = real_tool_calls or structured.tools_used
+            if not structured.sources and real_sources:
+                structured.sources = real_sources
             render_research_result(structured, real_tool_calls, stream=stream)
         except OutputParserException as exc:
-            logger.error("Không phân tích được kết quả JSON: %s", exc)
-            console.print("[bold red]Lỗi phân tích cú pháp JSON kết quả:[/bold red]")
-            console.print(final_output)
+            logger.warning("Không phân tích được kết quả JSON: %s. Chuyển sang fallback structured.", exc)
+            structured = ResearchResponse(
+                topic=query,
+                sources=real_sources,
+                tools_used=real_tool_calls,
+                summary=final_output,
+            )
+            render_research_result(structured, real_tool_calls, stream=stream)
 
     transcript.add_turn(
         question=query,

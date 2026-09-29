@@ -10,6 +10,7 @@ Khởi tạo hệ thống Multi-Agent nghiên cứu bằng LangGraph:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Annotated, Any, Literal, Optional
 from typing_extensions import TypedDict
 
@@ -33,6 +34,56 @@ from tools import fetch_url_tool, search_tool, wiki_tool
 from transcript import ToolStep
 
 logger = logging.getLogger(__name__)
+
+_URL_RE = re.compile(r"https?://[^\s\)\],\"'<>]+")
+
+
+def extract_sources_from_tool_steps(tool_steps: list[Any]) -> list[str]:
+    """Trích xuất danh sách URL và nguồn thực tế từ lịch sử chạy tool."""
+    sources: list[str] = []
+    seen = set()
+
+    def _add(s: str) -> None:
+        cleaned = s.strip().rstrip(".,;)")
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            sources.append(cleaned)
+
+    for step in tool_steps:
+        tool_name = getattr(step, "tool", "")
+        step_input = getattr(step, "input", None)
+        step_output = getattr(step, "output", "")
+
+        # 1. URL từ fetch_url_tool
+        if tool_name == "fetch_url_tool":
+            if isinstance(step_input, dict):
+                url = str(step_input.get("url", ""))
+            else:
+                url = str(step_input or "")
+            if url.startswith("http://") or url.startswith("https://"):
+                _add(url)
+
+        # 2. URL trong kết quả của search_tool
+        elif tool_name == "search_tool":
+            for match in _URL_RE.finditer(step_output):
+                _add(match.group(0))
+
+        # 3. Wikipedia query
+        elif tool_name == "wiki_tool":
+            q = (
+                step_input.get("query")
+                if isinstance(step_input, dict)
+                else str(step_input or "")
+            )
+            if q:
+                _add(f"Wikipedia: {q}")
+
+        # Các trường hợp khác có link
+        else:
+            for match in _URL_RE.finditer(step_output):
+                _add(match.group(0))
+
+    return sources
 
 
 class ResearchState(TypedDict):
@@ -159,12 +210,32 @@ def build_research_graph(settings: Settings) -> tuple[Any, PydanticOutputParser]
 
         raw_text = str(response.content)
         structured = None
+        real_tools = sorted({s.tool for s in tool_steps})
+        real_sources = extract_sources_from_tool_steps(tool_steps)
+
         try:
             structured = parse_agent_output(raw_text, parser)
-            real_tools = sorted({s.tool for s in tool_steps})
             structured.tools_used = real_tools or structured.tools_used
+
+            # Bù hoặc hợp nhất nguồn tham khảo thực tế đã truy vấn
+            if not structured.sources:
+                structured.sources = real_sources
+            else:
+                combined_sources: list[str] = []
+                seen_src: set[str] = set()
+                for src in structured.sources + real_sources:
+                    if src not in seen_src:
+                        seen_src.add(src)
+                        combined_sources.append(src)
+                structured.sources = combined_sources
         except Exception as exc:
             logger.warning("Lỗi phân tích JSON ở CriticWriter: %s", exc)
+            structured = ResearchResponse(
+                topic=query,
+                sources=real_sources,
+                tools_used=real_tools,
+                summary=raw_text,
+            )
 
         return {
             "final_output": raw_text,

@@ -142,7 +142,7 @@ def fetch_url_tool(url: str) -> str:
         if _is_binary_or_corrupted(text):
             return f"Không thể trích xuất nội dung từ URL '{url}' (nội dung trang bị mã hóa nhị phân hoặc không đọc được)."
 
-        max_chars = 3500
+        max_chars = 2500
         if len(text) > max_chars:
             text = text[:max_chars] + f"\n\n... (Đã cắt ngắn nội dung từ tổng số {len(text)} ký tự)"
         return text

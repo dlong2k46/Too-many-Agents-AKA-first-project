@@ -90,8 +90,8 @@ def load_settings(env_file: str | Path = ".env") -> Settings:
             "MODEL_BASE_URL", "https://integrate.api.nvidia.com/v1"
         ),
         temperature=_get_float("MODEL_TEMPERATURE", "0.2"),
-        max_tokens=_get_int("MODEL_MAX_TOKENS", "2048"),
-        max_iterations=_get_int("MAX_ITERATIONS", "8"),
+        max_tokens=_get_int("MODEL_MAX_TOKENS", "3072"),
+        max_iterations=_get_int("MAX_ITERATIONS", "4"),
         max_chat_history_messages=_get_int("MAX_CHAT_HISTORY_MESSAGES", "10"),
         output_dir=Path(os.getenv("OUTPUT_DIR", "runs")),
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
