@@ -7,10 +7,8 @@ langchain_community
 langchain_openai
 langsmith
 
-
 ddgs
 wikipedia
-rich
 langgraph
 trafilatura
 grandalf

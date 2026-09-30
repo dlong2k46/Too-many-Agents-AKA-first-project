@@ -1,40 +1,32 @@
 """
 main.py
 -------
-Điểm vào chương trình Research Agent (Multi-Agent kiến trúc LangGraph).
+Điểm vào chương trình Research Agent (Kiến trúc Multi-Agent bằng LangGraph).
 
-Chạy chế độ hỏi liên tục:
-    python main.py
-
-Chạy một câu hỏi duy nhất rồi thoát:
-    python main.py --query "AI là gì?"
-
-Xem danh sách các phiên nghiên cứu cũ:
-    python main.py --list-sessions
-
-Tiếp tục phiên làm việc cũ:
-    python main.py --session <session_id>
-
-Xem sơ đồ kiến trúc các Node trong LangGraph:
-    python main.py --show-graph
+Cách sử dụng:
+    python main.py                          # Chế độ hỏi đáp liên tục qua dòng lệnh
+    python main.py --query "AI Agent là gì?" # Chạy một câu hỏi duy nhất rồi thoát
+    python main.py --list-sessions          # Xem danh sách các phiên nghiên cứu đã lưu
+    python main.py --session <session_id>   # Nạp lại phiên nghiên cứu cũ
+    python main.py --show-graph             # Xem sơ đồ kiến trúc các Node
 """
 
 from __future__ import annotations
 
 import argparse
-import logging
-import sys
-import uuid
 from datetime import datetime
+import logging
 from pathlib import Path
+import sys
 from typing import Any
+import uuid
 
+# Cấu hình UTF-8 cho console trên Windows
 if sys.platform == "win32":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
-
 
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, HumanMessage
@@ -53,16 +45,67 @@ from output_parsing import parse_agent_output
 from schemas import ResearchResponse
 from session_manager import SessionManager
 from transcript import MarkdownTranscriptWriter, ToolStep
-from ui import (
-    SimpleNodeSpinner,
-    console,
-    render_graph_view,
-    render_research_result,
-    render_session_list,
-)
 
 logger = logging.getLogger(__name__)
 
+
+# =====================================================================
+# Terminal Output Helpers (Không dùng thư viện bên ngoài)
+# =====================================================================
+
+def print_research_result(structured: ResearchResponse, real_tool_calls: list[str]) -> None:
+    """In kết quả nghiên cứu sạch sẽ, rõ ràng theo chuẩn Markdown."""
+    print("\n" + "=" * 60)
+    print(f"📌 CHỦ ĐỀ: {structured.topic}")
+    print("=" * 60)
+    print("\n📝 TÓM TẮT BÁO CÁO:\n")
+    print(structured.summary.strip())
+    print("\n" + "-" * 60)
+    print("🔍 NGUỒN THAM KHẢO & CÔNG CỤ:")
+    if structured.sources:
+        for src in structured.sources:
+            print(f"  • {src}")
+    else:
+        print("  (Không có nguồn ngoài hoặc dùng kiến thức nền)")
+    tools_str = ", ".join(real_tool_calls) if real_tool_calls else "(Không gọi tool)"
+    print(f"  Tool đã dùng: {tools_str}")
+    print("=" * 60 + "\n")
+
+
+def print_session_list(sessions: list[dict[str, Any]]) -> None:
+    """In danh sách các phiên làm việc dưới dạng bảng text đơn giản."""
+    if not sessions:
+        print("Chưa có phiên nghiên cứu nào được lưu.")
+        return
+
+    print("\n" + "=" * 75)
+    print("📚 DANH SÁCH CÁC PHIÊN NGHIÊN CỨU (SESSIONS)")
+    print("=" * 75)
+    print(f"{'Session ID':<30} | {'Cập nhật gần nhất':<19} | {'Lượt':<5} | {'Chủ đề gần nhất'}")
+    print("-" * 75)
+    for s in sessions:
+        updated = (s.get("updated_at") or s.get("created_at") or "-")[:19].replace("T", " ")
+        print(f"{s['session_id']:<30} | {updated:<19} | {s.get('turns', 0):<5} | {s.get('last_topic', '(Chưa có chủ đề)')}")
+    print("=" * 75)
+    print("Gợi ý: Dùng lệnh 'python main.py --session <SESSION_ID>' để tiếp tục phiên làm việc cũ.\n")
+
+
+def print_graph_view(ascii_art: str, mermaid_art: str | None = None) -> None:
+    """In sơ đồ workflow của LangGraph ra terminal."""
+    print("\n" + "=" * 60)
+    print("🧩 SƠ ĐỒ KIẾN TRÚC LANGGRAPH (MULTI-AGENT WORKFLOW)")
+    print("=" * 60)
+    print(ascii_art)
+    if mermaid_art:
+        print("-" * 60)
+        print("Cú pháp Mermaid (sao chép để vẽ trong Mermaid Live Editor):")
+        print(f"```mermaid\n{mermaid_art}\n```")
+    print("=" * 60 + "\n")
+
+
+# =====================================================================
+# Session & Directory Management
+# =====================================================================
 
 def setup_logging(level_name: str) -> None:
     level = getattr(logging, level_name, logging.INFO)
@@ -97,6 +140,10 @@ def resolve_run_dir(base: Path, session_arg: str | None) -> tuple[Path, bool]:
     return candidate, False
 
 
+# =====================================================================
+# Query Execution Engine
+# =====================================================================
+
 def run_query(
     query: str,
     graph: Any,
@@ -105,11 +152,9 @@ def run_query(
     transcript: MarkdownTranscriptWriter,
     run_dir: Path,
     max_history: int,
-    stream: bool = True,
-    spinner: SimpleNodeSpinner | None = None,
     trace_logger: JsonlTraceLogger | None = None,
 ) -> None:
-    """Chạy một câu hỏi qua đồ thị LangGraph với spinner tượng trưng theo Node, lưu chi tiết vào transcript."""
+    """Chạy câu hỏi qua đồ thị LangGraph, hiển thị tiến trình và lưu kết quả."""
     initial_state = {
         "messages": [HumanMessage(content=query)],
         "query": query,
@@ -122,28 +167,21 @@ def run_query(
     final_output = ""
     structured = None
 
-    active_spinner = spinner or SimpleNodeSpinner(console)
-    active_spinner.start("Đang nghiên cứu và thu thập dữ liệu...")
+    print("\n⏳ Đang xử lý truy vấn và thu thập dữ liệu...")
 
     config = {}
     if trace_logger:
         config["callbacks"] = [trace_logger]
 
-    try:
-        for event in graph.stream(initial_state, config=config, stream_mode="updates"):
-            for node_name, updates in event.items():
-                if node_name in {"researcher", "tools"}:
-                    active_spinner.update("Đang nghiên cứu và thu thập dữ liệu...")
-                    steps = updates.get("tool_steps", [])
-                    if steps:
-                        accumulated_tool_steps = steps
-                elif node_name == "critic_writer":
-                    active_spinner.update("Đang phản biện và tổng hợp báo cáo...")
-                    final_output = updates.get("final_output", "")
-                    structured = updates.get("structured_response")
-    finally:
-        active_spinner.stop()
-
+    for event in graph.stream(initial_state, config=config, stream_mode="updates"):
+        for node_name, updates in event.items():
+            if node_name in {"researcher", "tools"}:
+                steps = updates.get("tool_steps", [])
+                if steps:
+                    accumulated_tool_steps = steps
+            elif node_name == "critic_writer":
+                final_output = updates.get("final_output", "")
+                structured = updates.get("structured_response")
 
     real_tool_calls = sorted({s.tool for s in accumulated_tool_steps})
     real_sources = extract_sources_from_tool_steps(accumulated_tool_steps)
@@ -154,23 +192,23 @@ def run_query(
         structured.tools_used = real_tool_calls or structured.tools_used
         if not structured.sources and real_sources:
             structured.sources = real_sources
-        render_research_result(structured, real_tool_calls, stream=stream)
+        print_research_result(structured, real_tool_calls)
     elif final_output:
         try:
             structured = parse_agent_output(final_output, parser)
             structured.tools_used = real_tool_calls or structured.tools_used
             if not structured.sources and real_sources:
                 structured.sources = real_sources
-            render_research_result(structured, real_tool_calls, stream=stream)
+            print_research_result(structured, real_tool_calls)
         except OutputParserException as exc:
-            logger.warning("Không phân tích được kết quả JSON: %s. Chuyển sang fallback structured.", exc)
+            logger.warning("Không phân tích được JSON: %s. Chuyển sang fallback.", exc)
             structured = ResearchResponse(
                 topic=query,
                 sources=real_sources,
                 tools_used=real_tool_calls,
                 summary=final_output,
             )
-            render_research_result(structured, real_tool_calls, stream=stream)
+            print_research_result(structured, real_tool_calls)
 
     transcript.add_turn(
         question=query,
@@ -195,6 +233,10 @@ def run_query(
     )
 
 
+# =====================================================================
+# CLI Entrypoint
+# =====================================================================
+
 def build_cli_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Research Agent CLI (LangGraph Multi-Agent)")
     p.add_argument(
@@ -216,11 +258,6 @@ def build_cli_parser() -> argparse.ArgumentParser:
         help="Hiển thị sơ đồ kiến trúc các Node trong LangGraph.",
     )
     p.add_argument(
-        "--no-stream",
-        action="store_true",
-        help="Tắt hiệu ứng streaming khi hiển thị phần tóm tắt.",
-    )
-    p.add_argument(
         "--env-file", default=".env", help="Đường dẫn file .env (mặc định: .env)."
     )
     return p
@@ -232,23 +269,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings: Settings = load_settings(args.env_file)
     except ConfigError as exc:
-        console.print(f"[bold red]Lỗi cấu hình:[/bold red] {exc}", file=sys.stderr)
+        print(f"Lỗi cấu hình: {exc}", file=sys.stderr)
         return 1
 
     setup_logging(settings.log_level)
 
-    # Khởi tạo đồ thị LangGraph
     graph, output_parser = build_research_graph(settings)
 
     if args.show_graph:
-        ascii_art = get_graph_ascii(graph)
-        mermaid_art = get_graph_mermaid(graph)
-        render_graph_view(ascii_art, mermaid_art)
+        print_graph_view(get_graph_ascii(graph), get_graph_mermaid(graph))
         return 0
 
     if args.list_sessions:
         sessions = SessionManager.list_sessions(settings.output_dir)
-        render_session_list(sessions)
+        print_session_list(sessions)
         return 0
 
     run_dir, is_resumed = resolve_run_dir(settings.output_dir, args.session)
@@ -259,22 +293,15 @@ def main(argv: list[str] | None = None) -> int:
         run_dir / "transcript.md", title="Lịch sử nghiên cứu của Agent"
     )
 
-    spinner = SimpleNodeSpinner(console)
-
     chat_history: list = []
     if is_resumed:
-        chat_history, meta = SessionManager.load_session_state(run_dir)
-        console.print(
-            f"[bold green]✔ Đã nạp lại phiên làm việc:[/] [cyan]{session_id}[/] "
-            f"([yellow]{len(chat_history) // 2} câu hỏi trước đó[/])"
-        )
+        chat_history, _ = SessionManager.load_session_state(run_dir)
+        print(f"✔ Đã nạp lại phiên làm việc: {session_id} ({len(chat_history) // 2} câu hỏi trước đó)")
     else:
-        console.print(f"[bold green]Phiên làm việc mới:[/] [cyan]{session_id}[/]")
+        print(f"Phiên làm việc mới: {session_id}")
 
-    console.print(f"[dim]Transcript     :[/] {transcript.path.resolve()}")
-    console.print(f"[dim]Trace kỹ thuật :[/dim] {trace_logger.path.resolve()}\n")
-
-    stream_enabled = not args.no_stream
+    print(f"Transcript     : {transcript.path.resolve()}")
+    print(f"Trace kỹ thuật : {trace_logger.path.resolve()}\n")
 
     try:
         if args.query:
@@ -286,20 +313,18 @@ def main(argv: list[str] | None = None) -> int:
                 transcript=transcript,
                 run_dir=run_dir,
                 max_history=settings.max_chat_history_messages,
-                stream=stream_enabled,
-                spinner=spinner,
                 trace_logger=trace_logger,
             )
         else:
-            console.print("[dim]Gõ 'exit' hoặc 'quit' để thoát. Gõ '/graph' để xem sơ đồ Node.[/dim]\n")
+            print("Gõ 'exit' hoặc 'quit' để thoát. Gõ '/graph' để xem sơ đồ Node.\n")
             while True:
-                query = console.input("[bold cyan]Nhập câu hỏi:[/] ").strip()
+                query = input("Nhập câu hỏi: ").strip()
                 if query.lower() in {"exit", "quit"}:
                     break
                 if not query:
                     continue
                 if query.lower() == "/graph":
-                    render_graph_view(get_graph_ascii(graph), get_graph_mermaid(graph))
+                    print_graph_view(get_graph_ascii(graph), get_graph_mermaid(graph))
                     continue
                 try:
                     run_query(
@@ -310,16 +335,14 @@ def main(argv: list[str] | None = None) -> int:
                         transcript=transcript,
                         run_dir=run_dir,
                         max_history=settings.max_chat_history_messages,
-                        stream=stream_enabled,
-                        spinner=spinner,
                         trace_logger=trace_logger,
                     )
                 except Exception:
-                    logger.exception("Lỗi khi xử lý câu hỏi trong LangGraph, agent vẫn tiếp tục chạy.")
-                    console.print("[bold red]Có lỗi xảy ra khi xử lý câu hỏi, vui lòng thử lại.[/bold red]")
-                console.print()
+                    logger.exception("Lỗi khi xử lý câu hỏi trong LangGraph.")
+                    print("Có lỗi xảy ra khi xử lý câu hỏi, vui lòng thử lại.")
+                print()
     except KeyboardInterrupt:
-        console.print("\n[yellow]Đã dừng theo yêu cầu người dùng.[/yellow]")
+        print("\nĐã dừng theo yêu cầu người dùng.")
 
     return 0
 

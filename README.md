@@ -12,16 +12,16 @@ Agent nghiên cứu chuyên sâu sử dụng mô hình **Multi-Agent** điều p
 ```
 .
 ├── .env.example       # Mẫu cấu hình — copy thành .env rồi điền giá trị thật
-├── requirements.txt     # Thư viện chạy chương trình (langgraph, trafilatura, rich, ddgs, wikipedia...)
+├── requirements.txt     # Thư viện chạy chương trình (langgraph, trafilatura, ddgs, wikipedia...)
 ├── config.py            # Nạp & kiểm tra cấu hình từ .env (MỘT nơi duy nhất)
 ├── schemas.py           # Định dạng dữ liệu đầu ra (ResearchResponse)
 ├── tools.py             # Tool: search_tool (ddgs), wiki_tool, fetch_url_tool (trafilatura)
 ├── prompts.py           # System prompts cho Researcher và Critic/Writer
 ├── agent.py             # Đồ thị StateGraph LangGraph (Researcher ➔ Tools ➔ CriticWriter)
+├── node.py              # Trực quan hóa sơ đồ đồ thị LangGraph (ASCII & Mermaid độc lập)
 ├── output_parsing.py    # Phân tích JSON từ output thô của agent
 ├── observability.py     # Ghi trace kỹ thuật dạng JSONL (mỗi sự kiện 1 dòng)
 ├── session_manager.py   # Quản lý lưu trữ & nạp lại các phiên nghiên cứu
-├── ui.py                # Giao diện Rich UI (spinner động, streaming, bảng biểu, xem graph)
 ├── transcript.py        # Ghi lịch sử hội thoại ra Markdown kèm trích xuất nguồn
 ├── main.py              # Điểm vào chương trình (CLI)
 └── tests/               # Unit test tự động
@@ -39,18 +39,20 @@ cp .env.example .env
 
 ## Chạy
 
-Chế độ hỏi liên tục với giao diện Rich UI (Spinner + Streaming):
+Chế độ hỏi liên tục qua dòng lệnh:
 
 ```bash
 python main.py
 ```
 
-Xem sơ đồ kiến trúc các Node của LangGraph:
+Xem nhanh sơ đồ kiến trúc Workflow của LangGraph (độc lập không cần API key):
 
 ```bash
-python main.py --show-graph
-# Hoặc gõ lệnh `/graph` khi đang trong màn hình hỏi đáp
+python node.py
+# Hoặc lưu sơ đồ Mermaid ra file:
+python node.py --save
 ```
+
 
 Chạy một câu hỏi rồi thoát (tiện cho script hoặc kiểm thử nhanh):
 

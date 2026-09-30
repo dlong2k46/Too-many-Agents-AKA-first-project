@@ -76,6 +76,41 @@ class TestLangGraph(unittest.TestCase):
         self.assertIn("https://example.com/trend1", sources)
         self.assertIn("https://example.com/trend2", sources)
 
+    def test_node_workflow_visualization(self):
+        from node import render_workflow
+
+        ascii_art, mermaid_art = render_workflow(settings=self.settings)
+        self.assertIn("researcher", ascii_art)
+        self.assertIn("critic_writer", ascii_art)
+        self.assertIn("researcher", mermaid_art)
+        self.assertIn("critic_writer", mermaid_art)
+
+    def test_should_continue_research(self):
+        from agent import should_continue_research
+        from langchain_core.messages import AIMessage
+
+        msg_with_tool = AIMessage(
+            content="",
+            tool_calls=[{"name": "search_tool", "args": {"query": "test"}, "id": "1"}],
+        )
+        state_with_tool = {"messages": [msg_with_tool], "iteration": 1}
+        self.assertEqual(
+            should_continue_research(state_with_tool, max_iterations=5), "tools"
+        )
+
+        msg_no_tool = AIMessage(content="Kết quả")
+        state_no_tool = {"messages": [msg_no_tool], "iteration": 1}
+        self.assertEqual(
+            should_continue_research(state_no_tool, max_iterations=5), "critic_writer"
+        )
+
+        state_exceeded = {"messages": [msg_with_tool], "iteration": 6}
+        self.assertEqual(
+            should_continue_research(state_exceeded, max_iterations=5), "critic_writer"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
