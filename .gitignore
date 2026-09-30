@@ -1,6 +1,18 @@
+# Virtual Environment
 .venv/
-__pycache__/
-*.pyc
+env/
+venv/
+
+# Environment Variables (Chứa API key - Tuyệt đối không commit)
 .env
+.env.local
+
+# Run & Test Artifacts
 runs/
 .pytest_cache/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary generated diagrams
+workflow.mermaid.md

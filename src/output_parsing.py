@@ -13,7 +13,7 @@ import re
 
 from langchain_core.output_parsers import PydanticOutputParser
 
-from schemas import ResearchResponse
+from .schemas import ResearchResponse
 
 # Lấy khối {...} đầu tiên đến cuối cùng — phòng khi LLM bọc JSON trong
 # ```json ... ``` hoặc thêm câu dẫn phía trước/sau.

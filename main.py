@@ -32,19 +32,19 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import PydanticOutputParser
 
-from agent import (
+from src.agent import (
     build_research_graph,
     extract_sources_from_chat_history,
     extract_sources_from_tool_steps,
     get_graph_ascii,
     get_graph_mermaid,
 )
-from config import ConfigError, Settings, load_settings
-from observability import JsonlTraceLogger
-from output_parsing import parse_agent_output
-from schemas import ResearchResponse
-from session_manager import SessionManager
-from transcript import MarkdownTranscriptWriter, ToolStep
+from src.config import ConfigError, Settings, load_settings
+from src.observability import JsonlTraceLogger
+from src.output_parsing import parse_agent_output
+from src.schemas import ResearchResponse
+from src.session_manager import SessionManager
+from src.transcript import MarkdownTranscriptWriter, ToolStep
 
 logger = logging.getLogger(__name__)
 

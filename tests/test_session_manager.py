@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 from langchain_core.messages import AIMessage, HumanMessage
 
-from session_manager import SessionManager
+from src.session_manager import SessionManager
 
 
 class TestSessionManager(unittest.TestCase):

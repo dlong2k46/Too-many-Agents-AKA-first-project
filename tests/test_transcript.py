@@ -1,8 +1,8 @@
 import unittest
 from pathlib import Path
 import tempfile
-from schemas import ResearchResponse
-from transcript import MarkdownTranscriptWriter, ToolStep
+from src.schemas import ResearchResponse
+from src.transcript import MarkdownTranscriptWriter, ToolStep
 
 
 class TestTranscript(unittest.TestCase):

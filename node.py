@@ -18,8 +18,8 @@ import sys
 if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from agent import build_research_graph, get_graph_ascii, get_graph_mermaid
-from config import Settings
+from src.agent import build_research_graph, get_graph_ascii, get_graph_mermaid
+from src.config import Settings
 
 
 def render_workflow(settings: Settings | None = None) -> tuple[str, str]:

@@ -6,9 +6,9 @@ Unit tests cho logic trích xuất nguồn tự động từ tool steps (TDD).
 
 from __future__ import annotations
 
-from schemas import ResearchResponse
-from transcript import ToolStep
-from agent import extract_sources_from_tool_steps
+from src.schemas import ResearchResponse
+from src.transcript import ToolStep
+from src.agent import extract_sources_from_tool_steps
 
 
 def test_extract_sources_from_fetch_url():

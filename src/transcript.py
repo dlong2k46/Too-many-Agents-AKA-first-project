@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from schemas import ResearchResponse
+from .schemas import ResearchResponse
 
 
 @dataclass

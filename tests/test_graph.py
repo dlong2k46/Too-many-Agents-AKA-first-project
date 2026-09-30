@@ -1,6 +1,7 @@
 import unittest
-from config import Settings
 from pathlib import Path
+
+from src.config import Settings
 
 
 class TestLangGraph(unittest.TestCase):
@@ -19,7 +20,7 @@ class TestLangGraph(unittest.TestCase):
         )
 
     def test_build_research_graph_nodes(self):
-        from agent import build_research_graph, get_graph_ascii, get_graph_mermaid
+        from src.agent import build_research_graph, get_graph_ascii, get_graph_mermaid
 
         graph, parser = build_research_graph(self.settings)
 
@@ -39,7 +40,7 @@ class TestLangGraph(unittest.TestCase):
         self.assertIn("critic_writer", mermaid_art)
 
     def test_format_critic_writer_context_includes_history_and_researcher(self):
-        from agent import format_critic_writer_context
+        from src.agent import format_critic_writer_context
         from langchain_core.messages import AIMessage, HumanMessage
 
         chat_history = [
@@ -62,7 +63,7 @@ class TestLangGraph(unittest.TestCase):
         self.assertIn("áo baby tee với quần ống rộng", context)
 
     def test_extract_sources_from_chat_history(self):
-        from agent import extract_sources_from_chat_history
+        from src.agent import extract_sources_from_chat_history
         from langchain_core.messages import AIMessage, HumanMessage
 
         chat_history = [
@@ -86,7 +87,7 @@ class TestLangGraph(unittest.TestCase):
         self.assertIn("critic_writer", mermaid_art)
 
     def test_should_continue_research(self):
-        from agent import should_continue_research
+        from src.agent import should_continue_research
         from langchain_core.messages import AIMessage
 
         msg_with_tool = AIMessage(
