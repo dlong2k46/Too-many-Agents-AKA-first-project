@@ -34,6 +34,9 @@ class Turn:
     tool_calls: list[str]
     timestamp: datetime = field(default_factory=datetime.now)
     tool_steps: list[ToolStep] = field(default_factory=list)
+    elapsed_seconds: float = 0.0
+    token_usage: dict[str, int] = field(default_factory=dict)
+    estimated_cost: float = 0.0
 
 
 class MarkdownTranscriptWriter:
@@ -68,6 +71,9 @@ class MarkdownTranscriptWriter:
         structured: Optional[ResearchResponse],
         tool_calls: list[str],
         tool_steps: Optional[list[ToolStep]] = None,
+        elapsed_seconds: float = 0.0,
+        token_usage: Optional[dict[str, int]] = None,
+        estimated_cost: float = 0.0,
     ) -> None:
         turn = Turn(
             question=question,
@@ -75,6 +81,9 @@ class MarkdownTranscriptWriter:
             structured=structured,
             tool_calls=tool_calls,
             tool_steps=tool_steps or [],
+            elapsed_seconds=elapsed_seconds,
+            token_usage=token_usage or {},
+            estimated_cost=estimated_cost,
         )
         self.turns.append(turn)
         current_index = self.turn_offset + len(self.turns)
@@ -101,6 +110,9 @@ class MarkdownTranscriptWriter:
             s = turn.structured
             lines.append(f"**Chủ đề:** {s.topic}")
             lines.append("")
+            if hasattr(s, "confidence_score"):
+                lines.append(f"**Độ tin cậy (Critic Confidence):** {s.confidence_score}/100 — _{s.confidence_reason}_")
+                lines.append("")
             lines.append("**Tóm tắt:**")
             lines.append(s.summary)
             lines.append("")
@@ -142,7 +154,21 @@ class MarkdownTranscriptWriter:
                     lines.append("    ```")
                 lines.append("")
 
+        if turn.elapsed_seconds > 0 or turn.token_usage or turn.estimated_cost > 0:
+            lines.append("**Chỉ số thực thi:**")
+            if turn.elapsed_seconds > 0:
+                lines.append(f"- ⏱ Thời gian: {turn.elapsed_seconds:.2f}s")
+            if turn.token_usage:
+                p = turn.token_usage.get("prompt_tokens", 0)
+                c = turn.token_usage.get("completion_tokens", 0)
+                t = turn.token_usage.get("total_tokens", p + c)
+                lines.append(f"- 📊 Token: {t:,} (Prompt: {p:,} | Output: {c:,})")
+            if turn.estimated_cost > 0:
+                lines.append(f"- 💰 Chi phí ước tính: ${turn.estimated_cost:.5f}")
+            lines.append("")
+
         lines.append("---")
         return "\n".join(lines)
+
 
 

@@ -18,6 +18,7 @@ from datetime import datetime
 import logging
 from pathlib import Path
 import sys
+import time
 from typing import Any
 import uuid
 
@@ -39,7 +40,7 @@ from src.agent import (
     get_graph_ascii,
     get_graph_mermaid,
 )
-from src.config import ConfigError, Settings, load_settings
+from src.config import ConfigError, Settings, calculate_token_cost, load_settings
 from src.observability import JsonlTraceLogger
 from src.output_parsing import parse_agent_output
 from src.schemas import ResearchResponse
@@ -53,8 +54,14 @@ logger = logging.getLogger(__name__)
 # Terminal Output Helpers (Không dùng thư viện bên ngoài)
 # =====================================================================
 
-def print_research_result(structured: ResearchResponse, real_tool_calls: list[str]) -> None:
-    """In kết quả nghiên cứu sạch sẽ, rõ ràng theo chuẩn Markdown."""
+def print_research_result(
+    structured: ResearchResponse,
+    real_tool_calls: list[str],
+    elapsed_seconds: float = 0.0,
+    token_usage: dict[str, int] | None = None,
+    estimated_cost: float = 0.0,
+) -> None:
+    """In kết quả nghiên cứu sạch sẽ, rõ ràng kèm các chỉ số hiệu năng."""
     print("\n" + "=" * 60)
     print(f"📌 CHỦ ĐỀ: {structured.topic}")
     print("=" * 60)
@@ -69,7 +76,27 @@ def print_research_result(structured: ResearchResponse, real_tool_calls: list[st
         print("  (Không có nguồn ngoài hoặc dùng kiến thức nền)")
     tools_str = ", ".join(real_tool_calls) if real_tool_calls else "(Không gọi tool)"
     print(f"  Tool đã dùng: {tools_str}")
+
+    print("-" * 60)
+    print("📈 CHỈ SỐ THỰC THI (METRICS):")
+    if elapsed_seconds > 0:
+        print(f"  ⏱ Thời gian xử lý   : {elapsed_seconds:.2f} giây")
+
+    if token_usage:
+        p = token_usage.get("prompt_tokens", 0)
+        c = token_usage.get("completion_tokens", 0)
+        t = token_usage.get("total_tokens", p + c)
+        print(f"  📊 Tiêu thụ Token   : {t:,} tokens (Prompt: {p:,} | Output: {c:,})")
+
+    if estimated_cost > 0:
+        vnd_cost = int(estimated_cost * 25400)
+        print(f"  💰 Chi phí ước tính : ~${estimated_cost:.5f} (~{vnd_cost:,} VNĐ)")
+
+    if hasattr(structured, "confidence_score"):
+        print(f"  🎯 Độ tin cậy (AI)  : {structured.confidence_score}/100 ({structured.confidence_reason})")
+
     print("=" * 60 + "\n")
+
 
 
 def print_session_list(sessions: list[dict[str, Any]]) -> None:
@@ -152,18 +179,22 @@ def run_query(
     transcript: MarkdownTranscriptWriter,
     run_dir: Path,
     max_history: int,
+    settings: Settings,
     trace_logger: JsonlTraceLogger | None = None,
 ) -> None:
-    """Chạy câu hỏi qua đồ thị LangGraph, hiển thị tiến trình và lưu kết quả."""
+    """Chạy câu hỏi qua đồ thị LangGraph, hiển thị tiến trình, đo đạc metrics và lưu kết quả."""
+    start_time = time.perf_counter()
     initial_state = {
         "messages": [HumanMessage(content=query)],
         "query": query,
         "chat_history": list(chat_history),
         "tool_steps": [],
         "iteration": 0,
+        "token_usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
 
     accumulated_tool_steps: list[ToolStep] = []
+    accumulated_token_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     final_output = ""
     structured = None
 
@@ -175,6 +206,8 @@ def run_query(
 
     for event in graph.stream(initial_state, config=config, stream_mode="updates"):
         for node_name, updates in event.items():
+            if "token_usage" in updates and updates["token_usage"]:
+                accumulated_token_usage = updates["token_usage"]
             if node_name in {"researcher", "tools"}:
                 steps = updates.get("tool_steps", [])
                 if steps:
@@ -182,6 +215,16 @@ def run_query(
             elif node_name == "critic_writer":
                 final_output = updates.get("final_output", "")
                 structured = updates.get("structured_response")
+
+    elapsed_seconds = time.perf_counter() - start_time
+    p_tokens = accumulated_token_usage.get("prompt_tokens", 0)
+    c_tokens = accumulated_token_usage.get("completion_tokens", 0)
+    estimated_cost = calculate_token_cost(
+        prompt_tokens=p_tokens,
+        completion_tokens=c_tokens,
+        cost_per_1m_input=settings.cost_per_1m_input_tokens,
+        cost_per_1m_output=settings.cost_per_1m_output_tokens,
+    )
 
     real_tool_calls = sorted({s.tool for s in accumulated_tool_steps})
     real_sources = extract_sources_from_tool_steps(accumulated_tool_steps)
@@ -192,14 +235,26 @@ def run_query(
         structured.tools_used = real_tool_calls or structured.tools_used
         if not structured.sources and real_sources:
             structured.sources = real_sources
-        print_research_result(structured, real_tool_calls)
+        print_research_result(
+            structured,
+            real_tool_calls,
+            elapsed_seconds=elapsed_seconds,
+            token_usage=accumulated_token_usage,
+            estimated_cost=estimated_cost,
+        )
     elif final_output:
         try:
             structured = parse_agent_output(final_output, parser)
             structured.tools_used = real_tool_calls or structured.tools_used
             if not structured.sources and real_sources:
                 structured.sources = real_sources
-            print_research_result(structured, real_tool_calls)
+            print_research_result(
+                structured,
+                real_tool_calls,
+                elapsed_seconds=elapsed_seconds,
+                token_usage=accumulated_token_usage,
+                estimated_cost=estimated_cost,
+            )
         except OutputParserException as exc:
             logger.warning("Không phân tích được JSON: %s. Chuyển sang fallback.", exc)
             structured = ResearchResponse(
@@ -208,7 +263,13 @@ def run_query(
                 tools_used=real_tool_calls,
                 summary=final_output,
             )
-            print_research_result(structured, real_tool_calls)
+            print_research_result(
+                structured,
+                real_tool_calls,
+                elapsed_seconds=elapsed_seconds,
+                token_usage=accumulated_token_usage,
+                estimated_cost=estimated_cost,
+            )
 
     transcript.add_turn(
         question=query,
@@ -216,6 +277,9 @@ def run_query(
         structured=structured,
         tool_calls=real_tool_calls,
         tool_steps=accumulated_tool_steps,
+        elapsed_seconds=elapsed_seconds,
+        token_usage=accumulated_token_usage,
+        estimated_cost=estimated_cost,
     )
 
     chat_history.append(HumanMessage(content=query))
@@ -313,6 +377,7 @@ def main(argv: list[str] | None = None) -> int:
                 transcript=transcript,
                 run_dir=run_dir,
                 max_history=settings.max_chat_history_messages,
+                settings=settings,
                 trace_logger=trace_logger,
             )
         else:
@@ -335,6 +400,7 @@ def main(argv: list[str] | None = None) -> int:
                         transcript=transcript,
                         run_dir=run_dir,
                         max_history=settings.max_chat_history_messages,
+                        settings=settings,
                         trace_logger=trace_logger,
                     )
                 except Exception:
@@ -345,6 +411,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\nĐã dừng theo yêu cầu người dùng.")
 
     return 0
+
 
 
 if __name__ == "__main__":

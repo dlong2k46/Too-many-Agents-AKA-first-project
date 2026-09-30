@@ -53,11 +53,43 @@ class ResearchState(TypedDict):
     iteration: int
     structured_response: Optional[ResearchResponse]
     final_output: str
+    token_usage: dict[str, int]
 
 
 # =====================================================================
-# Helper Functions (Sources & Context)
+# Helper Functions (Sources, Context & Metrics)
 # =====================================================================
+
+def extract_token_usage(response: Any) -> dict[str, int]:
+    """Trích xuất prompt_tokens, completion_tokens, total_tokens an toàn từ phản hồi LLM."""
+    usage = getattr(response, "usage_metadata", None)
+    if isinstance(usage, dict):
+        p = int(usage.get("input_tokens", 0) or 0)
+        c = int(usage.get("output_tokens", 0) or 0)
+        t = int(usage.get("total_tokens", p + c) or (p + c))
+        return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": t}
+
+    resp_meta = getattr(response, "response_metadata", {})
+    if isinstance(resp_meta, dict):
+        tu = resp_meta.get("token_usage", {})
+        if isinstance(tu, dict):
+            p = int(tu.get("prompt_tokens", 0) or 0)
+            c = int(tu.get("completion_tokens", 0) or 0)
+            t = int(tu.get("total_tokens", p + c) or (p + c))
+            return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": t}
+
+    return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+
+def merge_token_usage(u1: dict[str, int] | None, u2: dict[str, int] | None) -> dict[str, int]:
+    """Cộng dồn số lượng token giữa các lượt gọi LLM."""
+    d1 = u1 or {}
+    d2 = u2 or {}
+    p = int(d1.get("prompt_tokens", 0) or 0) + int(d2.get("prompt_tokens", 0) or 0)
+    c = int(d1.get("completion_tokens", 0) or 0) + int(d2.get("completion_tokens", 0) or 0)
+    t = int(d1.get("total_tokens", 0) or 0) + int(d2.get("total_tokens", 0) or 0)
+    return {"prompt_tokens": p, "completion_tokens": c, "total_tokens": t}
+
 
 def extract_sources_from_tool_steps(tool_steps: list[Any]) -> list[str]:
     """Trích xuất danh sách URL và tên nguồn thực tế từ các bước chạy tool."""
@@ -179,9 +211,13 @@ def researcher_step(state: ResearchState, researcher_llm: Any) -> dict[str, Any]
     response = researcher_llm.invoke([sys_msg] + history + current_msgs)
     iteration = state.get("iteration", 0) + (1 if getattr(response, "tool_calls", None) else 0)
 
+    current_usage = state.get("token_usage", {})
+    updated_usage = merge_token_usage(current_usage, extract_token_usage(response))
+
     return {
         "messages": [response],
         "iteration": iteration,
+        "token_usage": updated_usage,
     }
 
 
@@ -242,6 +278,9 @@ def critic_writer_step(
     response = llm.invoke([SystemMessage(content=system_prompt), HumanMessage(content=user_context)])
     raw_text = str(response.content)
 
+    current_usage = state.get("token_usage", {})
+    updated_usage = merge_token_usage(current_usage, extract_token_usage(response))
+
     real_tools = sorted({s.tool for s in tool_steps})
     real_sources = extract_sources_from_tool_steps(tool_steps)
     if not real_sources and chat_history:
@@ -273,7 +312,9 @@ def critic_writer_step(
     return {
         "final_output": raw_text,
         "structured_response": structured,
+        "token_usage": updated_usage,
     }
+
 
 
 def should_continue_research(

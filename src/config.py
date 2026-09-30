@@ -47,6 +47,22 @@ class Settings:
     # --- LangSmith (tùy chọn) ---
     langsmith_tracing: bool
 
+    # --- Chi phí token ước tính (USD / 1M tokens) ---
+    cost_per_1m_input_tokens: float = 0.14
+    cost_per_1m_output_tokens: float = 0.28
+
+
+def calculate_token_cost(
+    prompt_tokens: int,
+    completion_tokens: int,
+    cost_per_1m_input: float = 0.14,
+    cost_per_1m_output: float = 0.28,
+) -> float:
+    """Tính chi phí token ước tính theo USD."""
+    return (
+        prompt_tokens * cost_per_1m_input + completion_tokens * cost_per_1m_output
+    ) / 1_000_000.0
+
 
 def _get_float(name: str, default: str) -> float:
     raw = os.getenv(name, default)
@@ -96,7 +112,10 @@ def load_settings(env_file: str | Path = ".env") -> Settings:
         output_dir=Path(os.getenv("OUTPUT_DIR", "runs")),
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         langsmith_tracing=os.getenv("LANGSMITH_TRACING", "false").lower() == "true",
+        cost_per_1m_input_tokens=_get_float("COST_PER_1M_INPUT_TOKENS", "0.14"),
+        cost_per_1m_output_tokens=_get_float("COST_PER_1M_OUTPUT_TOKENS", "0.28"),
     )
+
 
     if settings.max_iterations < 1:
         raise ConfigError("MAX_ITERATIONS phải >= 1.")

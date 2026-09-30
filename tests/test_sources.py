@@ -71,3 +71,22 @@ def test_research_response_schema_order():
     assert "sources" in properties
     assert "summary" in properties
     assert properties.index("sources") < properties.index("summary")
+
+
+def test_research_response_confidence_fields():
+    """Kiểm tra schema có chứa confidence_score và confidence_reason với giá trị mặc định hợp lệ."""
+    resp = ResearchResponse(
+        topic="AI",
+        summary="Summary test",
+        confidence_score=95,
+        confidence_reason="Xác thực từ 3 nguồn",
+    )
+    assert resp.confidence_score == 95
+    assert resp.confidence_reason == "Xác thực từ 3 nguồn"
+
+    # Kiểm tra default values
+    default_resp = ResearchResponse(topic="AI", summary="Summary test")
+    assert hasattr(default_resp, "confidence_score")
+    assert hasattr(default_resp, "confidence_reason")
+    assert 0 <= default_resp.confidence_score <= 100
+

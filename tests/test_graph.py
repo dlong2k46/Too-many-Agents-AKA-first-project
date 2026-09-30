@@ -110,8 +110,33 @@ class TestLangGraph(unittest.TestCase):
             should_continue_research(state_exceeded, max_iterations=5), "critic_writer"
         )
 
+    def test_extract_and_merge_token_usage(self):
+        from src.agent import extract_token_usage, merge_token_usage
+        from langchain_core.messages import AIMessage
+
+        msg = AIMessage(
+            content="test",
+            usage_metadata={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+        )
+        usage = extract_token_usage(msg)
+        self.assertEqual(usage["prompt_tokens"], 100)
+        self.assertEqual(usage["completion_tokens"], 50)
+        self.assertEqual(usage["total_tokens"], 150)
+
+        merged = merge_token_usage(usage, {"prompt_tokens": 50, "completion_tokens": 20, "total_tokens": 70})
+        self.assertEqual(merged["prompt_tokens"], 150)
+        self.assertEqual(merged["completion_tokens"], 70)
+        self.assertEqual(merged["total_tokens"], 220)
+
+    def test_calculate_token_cost(self):
+        from src.config import calculate_token_cost
+
+        cost = calculate_token_cost(prompt_tokens=1_000_000, completion_tokens=1_000_000, cost_per_1m_input=0.14, cost_per_1m_output=0.28)
+        self.assertAlmostEqual(cost, 0.42, places=4)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
